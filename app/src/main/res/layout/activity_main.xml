@@ -118,6 +118,19 @@
                 android:textColor="@color/white" />
 
             <Button
+                android:id="@+id/btnAddFiles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_primary_button"
+                android:tag="themeAccent"
+                android:fontFamily="@font/jetbrains_mono_bold"
+                android:minHeight="46dp"
+                android:text="Add files (photos, videos, any file)"
+                android:textAllCaps="false"
+                android:textColor="@color/white" />
+
+            <Button
                 android:id="@+id/btnSettings"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
