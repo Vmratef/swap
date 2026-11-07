@@ -13,6 +13,7 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
 		val btnStartServer: Button = findViewById(R.id.btnStartServer)
 		val btnStopServer: Button = findViewById(R.id.btnStopServer)
 		val btnSettings: Button = findViewById(R.id.btnSettings)
+		val btnAddFiles: Button = findViewById(R.id.btnAddFiles)
 
 		tvSubtitle.text = getString(R.string.subtitle)
 
@@ -88,6 +90,16 @@ class MainActivity : Activity() {
 			renderQr("")
 		}
 
+		btnAddFiles.setOnClickListener {
+			if (!ensureFolderSelected()) return@setOnClickListener
+			val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+				addCategory(Intent.CATEGORY_OPENABLE)
+				type = "*/*"
+				putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+			}
+			startActivityForResult(pick, REQ_PICK_FILES)
+		}
+
 		btnSettings.setOnClickListener {
 			startActivity(Intent(this, SettingsActivity::class.java))
 		}
@@ -121,6 +133,13 @@ class MainActivity : Activity() {
 
 	override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
 		super.onActivityResult(requestCode, resultCode, data)
+		if (requestCode == REQ_PICK_FILES && resultCode == RESULT_OK && data != null) {
+			val uris = mutableListOf<Uri>()
+			data.clipData?.let { cd -> for (i in 0 until cd.itemCount) uris.add(cd.getItemAt(i).uri) }
+			if (uris.isEmpty()) data.data?.let { uris.add(it) }
+			importUris(uris)
+			return
+		}
 		if (requestCode == REQ_PICK_FOLDER && resultCode == RESULT_OK) {
 			val uri = data?.data ?: return
 			val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -203,24 +222,45 @@ class MainActivity : Activity() {
 	private fun handleShareIntent(incomingIntent: Intent?) {
 		if (incomingIntent == null) return
 		val action = incomingIntent.action ?: return
-		val type = incomingIntent.type ?: return
-		if (action != Intent.ACTION_SEND || type.isBlank()) return
-		val streamUri = incomingIntent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: return
+		val uris = mutableListOf<Uri>()
+		if (action == Intent.ACTION_SEND) {
+			incomingIntent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
+		} else if (action == Intent.ACTION_SEND_MULTIPLE) {
+			incomingIntent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+		} else return
+		if (uris.isEmpty()) return
 		if (currentTreeUri.isNullOrBlank()) {
 			toast("Pick a folder to share first")
 			return
 		}
-		val displayName = queryDisplayName(streamUri) ?: "shared_file"
-		val bytes = runCatching { contentResolver.openInputStream(streamUri)?.use { it.readBytes() } }.getOrNull() ?: return
-		val storage = StorageAccess(this, currentTreeUri)
-		if (!storage.ensureRootExists()) {
-			toast("Shared folder unavailable")
+		importUris(uris)
+		setIntent(Intent())
+	}
+
+	// Copies files into the shared folder using streaming (no full-file RAM load) off the UI thread.
+	private fun importUris(uris: List<Uri>) {
+		if (uris.isEmpty()) return
+		val treeUri = currentTreeUri
+		if (treeUri.isNullOrBlank()) {
+			toast("Pick a folder to share first")
 			return
 		}
-		val saved = storage.saveFile("", displayName, bytes)
-		if (saved != null) {
-			toast("Imported: $saved")
-			setIntent(Intent())
+		toast("Importing ${uris.size} file(s)...")
+		uiScope.launch {
+			val ok = withContext(Dispatchers.IO) {
+				val storage = StorageAccess(this@MainActivity, treeUri)
+				if (!storage.ensureRootExists()) return@withContext -1
+				var done = 0
+				for (uri in uris) {
+					val name = queryDisplayName(uri) ?: "shared_file"
+					val saved = runCatching {
+						contentResolver.openInputStream(uri)?.use { storage.saveStream("", name, it) }
+					}.getOrNull()
+					if (saved != null) done++
+				}
+				done
+			}
+			if (ok < 0) toast("Shared folder unavailable") else toast("Imported $ok of ${uris.size} file(s)")
 		}
 	}
 
@@ -234,6 +274,7 @@ class MainActivity : Activity() {
 
 	companion object {
 		private const val REQ_PICK_FOLDER = 1201
+		private const val REQ_PICK_FILES = 1202
 
 		fun formatSafDisplayPath(uriString: String?): String {
 			if (uriString.isNullOrBlank()) return "Pick a folder"

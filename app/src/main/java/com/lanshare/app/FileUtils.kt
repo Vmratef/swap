@@ -132,6 +132,17 @@ if (safeName.isBlank()) return null
 return saveFileSaf(cleanDir, safeName, bytes)
 }
 
+fun saveStream(relativeDir: String, originalName: String, input: java.io.InputStream): String? {
+val cleanDir = normalizeRelativePath(relativeDir) ?: return null
+val safeName = sanitizeName(originalName)
+if (safeName.isBlank()) return null
+val dirUri = ensureSafDirectory(cleanDir) ?: return null
+val finalName = uniqueNameSaf(dirUri, safeName)
+val uri = createFile(dirUri, finalName, FileUtils.guessMimeType(finalName)) ?: return null
+context.contentResolver.openOutputStream(uri, "w")?.use { out -> input.copyTo(out, 64 * 1024) } ?: return null
+return finalName
+}
+
 override fun saveText(relativeDir: String, originalName: String, text: String): String? {
 return saveFile(relativeDir, originalName, text.toByteArray(Charsets.UTF_8))
 }
